@@ -237,10 +237,10 @@ int main(int argc, char const* argv[])
     cl_kernel kernel = ocl_get_kernel(ocl, "nlm");
 
     /* Generate four data images */
-    const int width = 2048;
-    const int height = 2048;
+    const int width = 1024;
+    const int height = 1024;
     const size_t image_size = width * height * sizeof(float);
-    const int num_images = 4;
+    const int num_images = 32;
     float **host_data = (float **) g_malloc0(num_images * sizeof(float *));
     cl_mem *dev_data_in = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
     cl_mem *dev_data_out = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
@@ -271,33 +271,29 @@ int main(int argc, char const* argv[])
         CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], dev_data_out[i], CL_FALSE, 0, image_size, host_data[i], 1, &events[i], &read_events[i]));
     }
 
-    clWaitForEvents(4, read_events);
+    clWaitForEvents(num_images, read_events);
     g_timer_stop(timer);
     g_print("Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
 
     /* Measure two GPU case */
     g_timer_start(timer);
-    for (int i = 0; i < num_images/2; i++) {
-        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[2*i]))
-        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[2*i]));
-        
-        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernel,
-                2, NULL, global_work_size, NULL,
-                0, NULL, &events[2*i]));
+    for (int i = 0; i < num_images/ocl->num_devices; i++) {
+        for (int j = 0; j < ocl->num_devices; j++) {
+            int idx = ocl->num_devices*i + j;
+            CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[idx]))
+            CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[idx]));
+            
+            CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[j], kernel,
+                        2, NULL, global_work_size, NULL,
+                        0, NULL, &events[idx]));
 
-        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], dev_data_out[2*i], CL_FALSE, 0, image_size, host_data[2*i], 1, &events[2*i], &read_events[2*i]));
-
-        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[2*i+1]))
-        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[2*i+1]));
-        
-        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[1], kernel,
-                2, NULL, global_work_size, NULL,
-                0, NULL, &events[2*i+1]));
-
-        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[1], dev_data_out[2*i+1], CL_FALSE, 0, image_size, host_data[2*i+1], 1, &events[2*i+1], &read_events[2*i+1]));
+            CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[j], dev_data_out[idx], CL_FALSE, 
+                        0, image_size, host_data[idx], 
+                        1, &events[idx], &read_events[idx]));
+        }
     }
 
-    clWaitForEvents(4, read_events);
+    clWaitForEvents(num_images, read_events);
     g_timer_stop(timer);
     g_print("2x GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
     g_timer_destroy(timer);
