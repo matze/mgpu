@@ -125,20 +125,16 @@ gboolean ocl_add_program(opencl_desc *ocl, const gchar *filename, const gchar *o
     }
 
     errcode = clBuildProgram(program, ocl->num_devices, ocl->devices, options, NULL, NULL);
-    CHECK_ERROR(errcode);
-
-    const int LOG_SIZE = 4096;
-    gchar* log = (gchar *) g_malloc0(LOG_SIZE * sizeof(char));
-    CHECK_ERROR(clGetProgramBuildInfo(program, ocl->devices[0], CL_PROGRAM_BUILD_LOG, LOG_SIZE, (void*) log, NULL));
-    g_print("\n=== Build log for %s===%s\n\n", filename, log);
 
     if (errcode != CL_SUCCESS) {
+        const int LOG_SIZE = 4096;
+        gchar* log = (gchar *) g_malloc0(LOG_SIZE * sizeof(char));
+        CHECK_ERROR(clGetProgramBuildInfo(program, ocl->devices[0], CL_PROGRAM_BUILD_LOG, LOG_SIZE, (void*) log, NULL));
         g_print("\n=== Build log for %s===%s\n\n", filename, log);
         g_free(log);
         g_free(buffer);
         return FALSE;
     }
-    g_free(log);
 
     /* Create all kernels in the program source and map their function names to
      * the corresponding cl_kernel object */
@@ -194,15 +190,17 @@ opencl_desc *ocl_new(void)
     ocl->devices = g_malloc0(ocl->num_devices * sizeof(cl_device_id));
     CHECK_ERROR(clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, ocl->num_devices, ocl->devices, NULL));
 
-    g_print("Number of devices: %i\n", ocl->num_devices);
-
     ocl->context = clCreateContext(NULL, ocl->num_devices, ocl->devices, NULL, NULL, &errcode);
     CHECK_ERROR(errcode);
 
     ocl->cmd_queues = g_malloc0(ocl->num_devices * sizeof(cl_command_queue));
     cl_command_queue_properties queue_properties = 0;
 
+    const size_t len = 256;
+    char device_name[len];
     for (int i = 0; i < ocl->num_devices; i++) {
+        CHECK_ERROR(clGetDeviceInfo(ocl->devices[i], CL_DEVICE_NAME, len, device_name, NULL));
+        printf("Device %i: %s\n", i, device_name);
         ocl->cmd_queues[i] = clCreateCommandQueue(ocl->context, ocl->devices[i], queue_properties, &errcode);
         CHECK_ERROR(errcode);
     }
@@ -240,11 +238,13 @@ int main(int argc, char const* argv[])
     const int width = 1024;
     const int height = 1024;
     const size_t image_size = width * height * sizeof(float);
-    const int num_images = 32;
+    const int num_images = 36;
     float **host_data = (float **) g_malloc0(num_images * sizeof(float *));
     cl_mem *dev_data_in = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
     cl_mem *dev_data_out = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
     cl_int errcode = CL_SUCCESS;
+
+    g_print("Computing <nlm> for %i images of size %ix%i\n", num_images, width, height);
 
     for (int i = 0; i < num_images; i++) {
         host_data[i] = (float *) g_malloc0(image_size);
@@ -295,7 +295,7 @@ int main(int argc, char const* argv[])
 
     clWaitForEvents(num_images, read_events);
     g_timer_stop(timer);
-    g_print("2x GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+    g_print("%ix GPU: %fs have passed\n", ocl->num_devices, g_timer_elapsed(timer, NULL));
     g_timer_destroy(timer);
 
     for (int i = 0; i < num_images; i++) {
