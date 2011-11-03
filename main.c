@@ -1,0 +1,317 @@
+
+#include <CL/cl.h>
+#include <glib-2.0/glib.h>
+#include <stdio.h>
+
+typedef struct {
+    cl_context context;
+    cl_uint num_devices;
+    cl_device_id *devices;
+    cl_command_queue *cmd_queues;
+
+    GList *kernel_table;
+    GHashTable *kernels;         /**< maps from kernel string to cl_kernel */
+} opencl_desc;
+
+static const gchar* opencl_error_msgs[] = {
+    "CL_SUCCESS",
+    "CL_DEVICE_NOT_FOUND",
+    "CL_DEVICE_NOT_AVAILABLE",
+    "CL_COMPILER_NOT_AVAILABLE",
+    "CL_MEM_OBJECT_ALLOCATION_FAILURE",
+    "CL_OUT_OF_RESOURCES",
+    "CL_OUT_OF_HOST_MEMORY",
+    "CL_PROFILING_INFO_NOT_AVAILABLE",
+    "CL_MEM_COPY_OVERLAP",
+    "CL_IMAGE_FORMAT_MISMATCH",
+    "CL_IMAGE_FORMAT_NOT_SUPPORTED",
+    "CL_BUILD_PROGRAM_FAILURE",
+    "CL_MAP_FAILURE",
+    "CL_MISALIGNED_SUB_BUFFER_OFFSET",
+    "CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST",
+
+    /* next IDs start at 30! */
+    "CL_INVALID_VALUE",
+    "CL_INVALID_DEVICE_TYPE",
+    "CL_INVALID_PLATFORM",
+    "CL_INVALID_DEVICE",
+    "CL_INVALID_CONTEXT",
+    "CL_INVALID_QUEUE_PROPERTIES",
+    "CL_INVALID_COMMAND_QUEUE",
+    "CL_INVALID_HOST_PTR",
+    "CL_INVALID_MEM_OBJECT",
+    "CL_INVALID_IMAGE_FORMAT_DESCRIPTOR",
+    "CL_INVALID_IMAGE_SIZE",
+    "CL_INVALID_SAMPLER",
+    "CL_INVALID_BINARY",
+    "CL_INVALID_BUILD_OPTIONS",
+    "CL_INVALID_PROGRAM",
+    "CL_INVALID_PROGRAM_EXECUTABLE",
+    "CL_INVALID_KERNEL_NAME",
+    "CL_INVALID_KERNEL_DEFINITION",
+    "CL_INVALID_KERNEL",
+    "CL_INVALID_ARG_INDEX",
+    "CL_INVALID_ARG_VALUE",
+    "CL_INVALID_ARG_SIZE",
+    "CL_INVALID_KERNEL_ARGS",
+    "CL_INVALID_WORK_DIMENSION",
+    "CL_INVALID_WORK_GROUP_SIZE",
+    "CL_INVALID_WORK_ITEM_SIZE",
+    "CL_INVALID_GLOBAL_OFFSET",
+    "CL_INVALID_EVENT_WAIT_LIST",
+    "CL_INVALID_EVENT",
+    "CL_INVALID_OPERATION",
+    "CL_INVALID_GL_OBJECT",
+    "CL_INVALID_BUFFER_SIZE",
+    "CL_INVALID_MIP_LEVEL",
+    "CL_INVALID_GLOBAL_WORK_SIZE"
+};
+
+/**
+ * \brief Returns the error constant as a string
+ * \param[in] error A valid OpenCL constant
+ * \return A string containing a human-readable constant or NULL if error is
+ *      invalid
+ */
+const gchar* opencl_map_error(int error)
+{
+    if (error >= -14)
+        return opencl_error_msgs[-error];
+    if (error <= -30)
+        return opencl_error_msgs[-error-15];
+    return NULL;
+}
+
+#define CHECK_ERROR(error) { \
+    if ((error) != CL_SUCCESS) g_message("OpenCL error <%s:%i>: %s", __FILE__, __LINE__, opencl_map_error((error))); }
+
+static gchar *ocl_read_program(const gchar *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL)
+        return NULL;
+
+    fseek(fp, 0, SEEK_END);
+    const size_t length = ftell(fp);
+    rewind(fp);
+
+    gchar *buffer = (gchar *) g_malloc0(length);
+    if (buffer == NULL) {
+        fclose(fp);
+        return NULL;
+    }
+
+    size_t buffer_length = fread(buffer, 1, length, fp);
+    fclose(fp);
+    if (buffer_length != length) {
+        g_free(buffer);
+        return NULL;
+    }
+    return buffer;
+}
+
+gboolean ocl_add_program(opencl_desc *ocl, const gchar *filename, const gchar *options)
+{
+    gchar *buffer = ocl_read_program(filename);
+    if (buffer == NULL) 
+        return FALSE;
+
+    int errcode = CL_SUCCESS;
+    cl_program program = clCreateProgramWithSource(ocl->context, 1, (const char **) &buffer, NULL, &errcode);
+
+    if (errcode != CL_SUCCESS) {
+        g_free(buffer);
+        return FALSE;
+    }
+
+    errcode = clBuildProgram(program, ocl->num_devices, ocl->devices, options, NULL, NULL);
+    CHECK_ERROR(errcode);
+
+    const int LOG_SIZE = 4096;
+    gchar* log = (gchar *) g_malloc0(LOG_SIZE * sizeof(char));
+    CHECK_ERROR(clGetProgramBuildInfo(program, ocl->devices[0], CL_PROGRAM_BUILD_LOG, LOG_SIZE, (void*) log, NULL));
+    g_print("\n=== Build log for %s===%s\n\n", filename, log);
+
+    if (errcode != CL_SUCCESS) {
+        g_print("\n=== Build log for %s===%s\n\n", filename, log);
+        g_free(log);
+        g_free(buffer);
+        return FALSE;
+    }
+    g_free(log);
+
+    /* Create all kernels in the program source and map their function names to
+     * the corresponding cl_kernel object */
+    cl_uint num_kernels;
+    CHECK_ERROR(clCreateKernelsInProgram(program, 0, NULL, &num_kernels));
+    cl_kernel *kernels = (cl_kernel *) g_malloc0(num_kernels * sizeof(cl_kernel));
+    CHECK_ERROR(clCreateKernelsInProgram(program, num_kernels, kernels, NULL));
+    ocl->kernel_table = g_list_append(ocl->kernel_table, kernels);
+
+    for (guint i = 0; i < num_kernels; i++) {
+        size_t kernel_name_length;    
+        CHECK_ERROR(clGetKernelInfo(kernels[i], CL_KERNEL_FUNCTION_NAME, 
+                0, NULL, 
+                &kernel_name_length));
+
+        gchar *kernel_name = (gchar *) g_malloc0(kernel_name_length);
+        CHECK_ERROR(clGetKernelInfo(kernels[i], CL_KERNEL_FUNCTION_NAME, 
+                        kernel_name_length, kernel_name, 
+                        NULL));
+
+        g_hash_table_insert(ocl->kernels, kernel_name, kernels[i]);
+    }
+
+    g_free(buffer);
+    return TRUE;
+}
+
+cl_kernel ocl_get_kernel(opencl_desc *ocl, const gchar *kernel_name)
+{
+    cl_kernel kernel = (cl_kernel) g_hash_table_lookup(ocl->kernels, kernel_name);
+    if (kernel == NULL)
+        return NULL;
+    CHECK_ERROR(clRetainKernel(kernel));
+    return kernel;
+}
+
+static void ocl_release_kernel(gpointer data)
+{
+    cl_kernel kernel = (cl_kernel) data;
+    CHECK_ERROR(clReleaseKernel(kernel));
+}
+
+opencl_desc *ocl_new(void)
+{
+    opencl_desc *ocl = g_malloc0(sizeof(opencl_desc));
+    ocl->kernels = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, ocl_release_kernel);
+
+    cl_platform_id platform;
+    int errcode = CL_SUCCESS;
+    CHECK_ERROR(clGetPlatformIDs(1, &platform, NULL));
+
+    CHECK_ERROR(clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 0, NULL, &ocl->num_devices));
+    ocl->devices = g_malloc0(ocl->num_devices * sizeof(cl_device_id));
+    CHECK_ERROR(clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, ocl->num_devices, ocl->devices, NULL));
+
+    g_print("Number of devices: %i\n", ocl->num_devices);
+
+    ocl->context = clCreateContext(NULL, ocl->num_devices, ocl->devices, NULL, NULL, &errcode);
+    CHECK_ERROR(errcode);
+
+    ocl->cmd_queues = g_malloc0(ocl->num_devices * sizeof(cl_command_queue));
+    cl_command_queue_properties queue_properties = 0;
+
+    for (int i = 0; i < ocl->num_devices; i++) {
+        ocl->cmd_queues[i] = clCreateCommandQueue(ocl->context, ocl->devices[i], queue_properties, &errcode);
+        CHECK_ERROR(errcode);
+    }
+    return ocl;
+}
+
+static void ocl_free(opencl_desc *ocl)
+{
+    g_hash_table_destroy(ocl->kernels);
+
+    g_list_foreach(ocl->kernel_table, (GFunc) g_free, NULL);
+    g_list_free(ocl->kernel_table);
+
+    for (int i = 0; i < ocl->num_devices; i++)
+        clReleaseCommandQueue(ocl->cmd_queues[i]);
+
+    CHECK_ERROR(clReleaseContext(ocl->context));
+
+    g_free(ocl->devices);
+    g_free(ocl->cmd_queues);
+    g_free(ocl);
+}
+
+int main(int argc, char const* argv[])
+{
+    opencl_desc *ocl = ocl_new();
+    if (!ocl_add_program(ocl, "nlm.cl", "")) {
+        g_warning("Could not open nlm.cl");
+        ocl_free(ocl);
+        return 1;
+    }
+    cl_kernel kernel = ocl_get_kernel(ocl, "nlm");
+
+    /* Generate four data images */
+    const int width = 2048;
+    const int height = 2048;
+    const size_t image_size = width * height * sizeof(float);
+    const int num_images = 4;
+    float **host_data = (float **) g_malloc0(num_images * sizeof(float *));
+    cl_mem *dev_data_in = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
+    cl_mem *dev_data_out = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
+    cl_int errcode = CL_SUCCESS;
+
+    for (int i = 0; i < num_images; i++) {
+        host_data[i] = (float *) g_malloc0(image_size);
+        dev_data_in[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, image_size, host_data[i], &errcode);
+        CHECK_ERROR(errcode);
+        dev_data_out[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, image_size, NULL, &errcode);
+        CHECK_ERROR(errcode);
+    }
+
+    cl_event events[num_images];
+    cl_event read_events[num_images];
+    size_t global_work_size[2] = { width, height };
+
+    /* Measure single GPU case */
+    GTimer *timer = g_timer_new();
+    for (int i = 0; i < num_images; i++) {
+        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[i]))
+        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[i]));
+        
+        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernel,
+                2, NULL, global_work_size, NULL,
+                0, NULL, &events[i]));
+
+        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], dev_data_out[i], CL_FALSE, 0, image_size, host_data[i], 1, &events[i], &read_events[i]));
+    }
+
+    clWaitForEvents(4, read_events);
+    g_timer_stop(timer);
+    g_print("Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+
+    /* Measure two GPU case */
+    g_timer_start(timer);
+    for (int i = 0; i < num_images/2; i++) {
+        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[2*i]))
+        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[2*i]));
+        
+        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernel,
+                2, NULL, global_work_size, NULL,
+                0, NULL, &events[2*i]));
+
+        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], dev_data_out[2*i], CL_FALSE, 0, image_size, host_data[2*i], 1, &events[2*i], &read_events[2*i]));
+
+        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[2*i+1]))
+        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[2*i+1]));
+        
+        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[1], kernel,
+                2, NULL, global_work_size, NULL,
+                0, NULL, &events[2*i+1]));
+
+        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[1], dev_data_out[2*i+1], CL_FALSE, 0, image_size, host_data[2*i+1], 1, &events[2*i+1], &read_events[2*i+1]));
+    }
+
+    clWaitForEvents(4, read_events);
+    g_timer_stop(timer);
+    g_print("2x GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+    g_timer_destroy(timer);
+
+    for (int i = 0; i < num_images; i++) {
+        g_free(host_data[i]);
+        CHECK_ERROR(clReleaseMemObject(dev_data_in[i]));
+        CHECK_ERROR(clReleaseMemObject(dev_data_out[i]));
+    }
+    g_free(host_data);
+    g_free(dev_data_in);
+    g_free(dev_data_out);
+
+    ocl_free(ocl);
+    return 0;
+}
+
