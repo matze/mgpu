@@ -140,7 +140,7 @@ cl_program ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar 
     return program;
 }
 
-opencl_desc *ocl_new(void)
+opencl_desc *ocl_new(gboolean profile)
 {
     opencl_desc *ocl = g_malloc0(sizeof(opencl_desc));
 
@@ -156,13 +156,13 @@ opencl_desc *ocl_new(void)
     CHECK_ERROR(errcode);
 
     ocl->cmd_queues = g_malloc0(ocl->num_devices * sizeof(cl_command_queue));
-    cl_command_queue_properties queue_properties = 0;
+    cl_command_queue_properties queue_properties = profile ? CL_QUEUE_PROFILING_ENABLE : 0;
 
     const size_t len = 256;
     char device_name[len];
     for (int i = 0; i < ocl->num_devices; i++) {
         CHECK_ERROR(clGetDeviceInfo(ocl->devices[i], CL_DEVICE_NAME, len, device_name, NULL));
-        printf("Device %i: %s\n", i, device_name);
+        printf("# Device %i: %s\n", i, device_name);
         ocl->cmd_queues[i] = clCreateCommandQueue(ocl->context, ocl->devices[i], queue_properties, &errcode);
         CHECK_ERROR(errcode);
     }
@@ -181,10 +181,31 @@ static void ocl_free(opencl_desc *ocl)
     g_free(ocl);
 }
 
+static void ocl_show_event_info(guint run, guint queue, guint event_type, guint num_events, cl_event *events)
+{
+    cl_ulong param;
+    size_t size = sizeof(cl_ulong);
+
+    g_print("# run device event [0=kernel,1=read] queued submitted start end\n");
+    for (int i = 0; i < num_events; i++) {
+        g_print("%d %d %d", run, queue, event_type);
+        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_QUEUED, size, &param, NULL));
+        g_print(" %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_SUBMIT, size, &param, NULL));
+        g_print(" %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_START, size, &param, NULL));
+        g_print(" %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_END, size, &param, NULL));
+        g_print(" %ld\n", param);
+    }
+}
+
 int main(int argc, char const* argv[])
 {
+    gboolean profile = TRUE;
+
     cl_int errcode = CL_SUCCESS;
-    opencl_desc *ocl = ocl_new();
+    opencl_desc *ocl = ocl_new(profile);
 
     cl_program program = ocl_get_program(ocl, "nlm.cl", "");
     if (program == NULL) {
@@ -209,7 +230,7 @@ int main(int argc, char const* argv[])
     cl_mem *dev_data_in = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
     cl_mem *dev_data_out = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
 
-    g_print("Computing <nlm> for %i images of size %ix%i\n", num_images, width, height);
+    g_print("# Computing <nlm> for %i images of size %ix%i\n", num_images, width, height);
 
     for (int i = 0; i < num_images; i++) {
         host_data[i] = (float *) g_malloc0(image_size);
@@ -238,7 +259,12 @@ int main(int argc, char const* argv[])
 
     clWaitForEvents(num_images, read_events);
     g_timer_stop(timer);
-    g_print("Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+    g_print("# Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+
+    if (profile) {
+        ocl_show_event_info(0, 0, 0, num_images, events);
+        ocl_show_event_info(0, 0, 1, num_images, read_events);
+    }
 
     /* Measure multiple GPU case */
     const int batch_size = num_images / ocl->num_devices;
@@ -261,8 +287,16 @@ int main(int argc, char const* argv[])
 
     clWaitForEvents(num_images, read_events);
     g_timer_stop(timer);
-    g_print("%ix GPU: %fs have passed\n", ocl->num_devices, g_timer_elapsed(timer, NULL));
+    g_print("# %ix GPU: %fs have passed\n", ocl->num_devices, g_timer_elapsed(timer, NULL));
     g_timer_destroy(timer);
+
+    if (profile) {
+        for (int i = 0; i < ocl->num_devices; i++) 
+            ocl_show_event_info(1, i, 0, batch_size, events + i*batch_size);
+
+        for (int i = 0; i < ocl->num_devices; i++) 
+            ocl_show_event_info(1, i, 1, batch_size, read_events + i*batch_size);
+    }
 
     for (int i = 0; i < num_images; i++) {
         g_free(host_data[i]);
