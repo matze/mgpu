@@ -110,7 +110,7 @@ static gchar *ocl_read_program(const gchar *filename)
     return buffer;
 }
 
-gboolean ocl_add_program(opencl_desc *ocl, const gchar *filename, const gchar *options)
+cl_program ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar *options)
 {
     gchar *buffer = ocl_read_program(filename);
     if (buffer == NULL) 
@@ -121,7 +121,7 @@ gboolean ocl_add_program(opencl_desc *ocl, const gchar *filename, const gchar *o
 
     if (errcode != CL_SUCCESS) {
         g_free(buffer);
-        return FALSE;
+        return NULL;
     }
 
     errcode = clBuildProgram(program, ocl->num_devices, ocl->devices, options, NULL, NULL);
@@ -133,54 +133,16 @@ gboolean ocl_add_program(opencl_desc *ocl, const gchar *filename, const gchar *o
         g_print("\n=== Build log for %s===%s\n\n", filename, log);
         g_free(log);
         g_free(buffer);
-        return FALSE;
-    }
-
-    /* Create all kernels in the program source and map their function names to
-     * the corresponding cl_kernel object */
-    cl_uint num_kernels;
-    CHECK_ERROR(clCreateKernelsInProgram(program, 0, NULL, &num_kernels));
-    cl_kernel *kernels = (cl_kernel *) g_malloc0(num_kernels * sizeof(cl_kernel));
-    CHECK_ERROR(clCreateKernelsInProgram(program, num_kernels, kernels, NULL));
-    ocl->kernel_table = g_list_append(ocl->kernel_table, kernels);
-
-    for (guint i = 0; i < num_kernels; i++) {
-        size_t kernel_name_length;    
-        CHECK_ERROR(clGetKernelInfo(kernels[i], CL_KERNEL_FUNCTION_NAME, 
-                0, NULL, 
-                &kernel_name_length));
-
-        gchar *kernel_name = (gchar *) g_malloc0(kernel_name_length);
-        CHECK_ERROR(clGetKernelInfo(kernels[i], CL_KERNEL_FUNCTION_NAME, 
-                        kernel_name_length, kernel_name, 
-                        NULL));
-
-        g_hash_table_insert(ocl->kernels, kernel_name, kernels[i]);
+        return NULL;
     }
 
     g_free(buffer);
-    return TRUE;
-}
-
-cl_kernel ocl_get_kernel(opencl_desc *ocl, const gchar *kernel_name)
-{
-    cl_kernel kernel = (cl_kernel) g_hash_table_lookup(ocl->kernels, kernel_name);
-    if (kernel == NULL)
-        return NULL;
-    CHECK_ERROR(clRetainKernel(kernel));
-    return kernel;
-}
-
-static void ocl_release_kernel(gpointer data)
-{
-    cl_kernel kernel = (cl_kernel) data;
-    CHECK_ERROR(clReleaseKernel(kernel));
+    return program;
 }
 
 opencl_desc *ocl_new(void)
 {
     opencl_desc *ocl = g_malloc0(sizeof(opencl_desc));
-    ocl->kernels = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, ocl_release_kernel);
 
     cl_platform_id platform;
     int errcode = CL_SUCCESS;
@@ -209,11 +171,6 @@ opencl_desc *ocl_new(void)
 
 static void ocl_free(opencl_desc *ocl)
 {
-    g_hash_table_destroy(ocl->kernels);
-
-    g_list_foreach(ocl->kernel_table, (GFunc) g_free, NULL);
-    g_list_free(ocl->kernel_table);
-
     for (int i = 0; i < ocl->num_devices; i++)
         clReleaseCommandQueue(ocl->cmd_queues[i]);
 
@@ -226,13 +183,22 @@ static void ocl_free(opencl_desc *ocl)
 
 int main(int argc, char const* argv[])
 {
+    cl_int errcode = CL_SUCCESS;
     opencl_desc *ocl = ocl_new();
-    if (!ocl_add_program(ocl, "nlm.cl", "")) {
+
+    cl_program program = ocl_get_program(ocl, "nlm.cl", "");
+    if (program == NULL) {
         g_warning("Could not open nlm.cl");
         ocl_free(ocl);
         return 1;
     }
-    cl_kernel kernel = ocl_get_kernel(ocl, "nlm");
+
+    /* Create kernel for each device */
+    cl_kernel *kernels = g_malloc0(ocl->num_devices * sizeof(cl_kernel));
+    for (int i = 0; i < ocl->num_devices; i++) {
+        kernels[i] = clCreateKernel(program, "nlm", &errcode);
+        CHECK_ERROR(errcode);
+    }
 
     /* Generate four data images */
     const int width = 1024;
@@ -242,7 +208,6 @@ int main(int argc, char const* argv[])
     float **host_data = (float **) g_malloc0(num_images * sizeof(float *));
     cl_mem *dev_data_in = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
     cl_mem *dev_data_out = (cl_mem *) g_malloc0(num_images * sizeof(cl_mem));
-    cl_int errcode = CL_SUCCESS;
 
     g_print("Computing <nlm> for %i images of size %ix%i\n", num_images, width, height);
 
@@ -261,10 +226,10 @@ int main(int argc, char const* argv[])
     /* Measure single GPU case */
     GTimer *timer = g_timer_new();
     for (int i = 0; i < num_images; i++) {
-        CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[i]))
-        CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[i]));
+        CHECK_ERROR(clSetKernelArg(kernels[0], 0, sizeof(cl_mem), (void *) &dev_data_in[i]))
+        CHECK_ERROR(clSetKernelArg(kernels[0], 1, sizeof(cl_mem), (void *) &dev_data_out[i]));
         
-        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernel,
+        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernels[0],
                 2, NULL, global_work_size, NULL,
                 0, NULL, &events[i]));
 
@@ -275,19 +240,20 @@ int main(int argc, char const* argv[])
     g_timer_stop(timer);
     g_print("Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
 
-    /* Measure two GPU case */
+    /* Measure multiple GPU case */
+    const int batch_size = num_images / ocl->num_devices;
     g_timer_start(timer);
-    for (int i = 0; i < num_images/ocl->num_devices; i++) {
-        for (int j = 0; j < ocl->num_devices; j++) {
-            int idx = ocl->num_devices*i + j;
-            CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in[idx]))
-            CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out[idx]));
+    for (int i = 0; i < ocl->num_devices; i++) {
+        for (int j = 0; j < batch_size; j++) {
+            int idx = i*batch_size + j;
+            CHECK_ERROR(clSetKernelArg(kernels[i], 0, sizeof(cl_mem), (void *) &dev_data_in[idx]))
+            CHECK_ERROR(clSetKernelArg(kernels[i], 1, sizeof(cl_mem), (void *) &dev_data_out[idx]));
             
-            CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[j], kernel,
+            CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[i], kernels[i],
                         2, NULL, global_work_size, NULL,
                         0, NULL, &events[idx]));
 
-            CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[j], dev_data_out[idx], CL_FALSE, 
+            CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[i], dev_data_out[idx], CL_FALSE, 
                         0, image_size, host_data[idx], 
                         1, &events[idx], &read_events[idx]));
         }
@@ -303,6 +269,7 @@ int main(int argc, char const* argv[])
         CHECK_ERROR(clReleaseMemObject(dev_data_in[i]));
         CHECK_ERROR(clReleaseMemObject(dev_data_out[i]));
     }
+    g_free(kernels);
     g_free(host_data);
     g_free(dev_data_in);
     g_free(dev_data_out);
