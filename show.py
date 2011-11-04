@@ -29,6 +29,9 @@ if __name__ == '__main__':
 
     # evaluate single GPU
     plt.subplot(211)
+    plt.title('Single GPU')
+    plt.xlabel('Time in ns')
+    
     show_times(single, 5)
 
     # handle multi gpu case
@@ -36,6 +39,8 @@ if __name__ == '__main__':
     m2 = multi[multi[:,1] == 1]
 
     plt.subplot(212)
+    plt.title('Two GPUs')
+    plt.xlabel('Time in ns')
     show_times(m1, 5)
     show_times(m2, 5, 'c', 'y')
     
