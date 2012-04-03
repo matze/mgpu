@@ -1,0 +1,7 @@
+## matthias@ipemv1
+# Device 0: GeForce GTX 580
+# Device 1: GeForce GTX 580
+# Computing <nlm> for 32 images of size 1024x1024
+# Single GPU: 18.713065s
+# 2x GPU (single thread): 18.729572s (error=0.000000)
+# 2x GPU (multi thread): 9.328695s (error=0.000000)

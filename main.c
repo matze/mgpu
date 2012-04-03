@@ -21,6 +21,8 @@ typedef struct {
     guint height;
     gsize image_size;
     gfloat **host_data;
+    gfloat **single_result;
+    gfloat **multi_result;
     cl_mem *dev_data_in;
     cl_mem *dev_data_out;
     cl_event *events;
@@ -227,10 +229,12 @@ static Benchmark *setup_benchmark(opencl_desc *ocl)
     Benchmark *b = (Benchmark *) g_malloc0(sizeof(Benchmark));
     cl_int errcode = CL_SUCCESS;
 
+    b->num_images = 32;
     b->width = 1024;
     b->height = 1024;
     b->image_size = b->width * b->height * sizeof(gfloat);
-    b->num_images = 36;
+    b->single_result = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
+    b->multi_result = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
     b->host_data = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
     b->dev_data_in = (cl_mem *) g_malloc0(b->num_images * sizeof(cl_mem));
     b->dev_data_out = (cl_mem *) g_malloc0(b->num_images * sizeof(cl_mem));
@@ -241,6 +245,12 @@ static Benchmark *setup_benchmark(opencl_desc *ocl)
 
     for (guint i = 0; i < b->num_images; i++) {
         b->host_data[i] = (gfloat *) g_malloc0(b->image_size);
+        b->single_result[i] = (gfloat *) g_malloc0(b->image_size);
+        b->multi_result[i] = (gfloat *) g_malloc0(b->image_size);
+        
+        for (guint j = 0; j < b->width * b->height; j++)
+            b->host_data[i][j] = (gfloat) g_random_double();
+
         b->dev_data_in[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, b->image_size, b->host_data[i], &errcode);
         CHECK_ERROR(errcode);
         b->dev_data_out[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, b->image_size, NULL, &errcode);
@@ -254,11 +264,15 @@ static void teardown_benchmark(Benchmark *b)
 {
     for (int i = 0; i < b->num_images; i++) {
         g_free(b->host_data[i]);
+        g_free(b->single_result[i]);
+        g_free(b->multi_result[i]);
         CHECK_ERROR(clReleaseMemObject(b->dev_data_in[i]));
         CHECK_ERROR(clReleaseMemObject(b->dev_data_out[i]));
     }
 
     g_free(b->host_data);
+    g_free(b->single_result);
+    g_free(b->multi_result);
     g_free(b->dev_data_in);
     g_free(b->dev_data_out);
     g_free(b->events);
@@ -280,19 +294,29 @@ static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel
                 0, NULL, &benchmark->events[i]));
 
         CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], benchmark->dev_data_out[i], CL_FALSE, 0, 
-                    benchmark->image_size, benchmark->host_data[i], 
+                    benchmark->image_size, benchmark->single_result[i], 
                     1, &benchmark->events[i], &benchmark->read_events[i]));
     }
 
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
     g_timer_stop(timer);
-    g_print("# Single GPU: %fs have passed\n", g_timer_elapsed(timer, NULL));
+    g_print("# Single GPU: %fs\n", g_timer_elapsed(timer, NULL));
     g_timer_destroy(timer);
 
     if (DO_PROFILE) {
         ocl_show_event_info(0, 0, 0, benchmark->num_images, benchmark->events);
         ocl_show_event_info(0, 0, 1, benchmark->num_images, benchmark->read_events);
     }
+}
+
+static gdouble compare_single_multi(Benchmark *benchmark)
+{
+    gdouble sum = 0.0;
+    for (guint i = 0; i < benchmark->num_images; i++)
+        for (guint j = 0; j < benchmark->width * benchmark->height; j++)
+            sum += ABS(benchmark->single_result[i][j] - benchmark->multi_result[i][j]);
+
+    return sum;
 }
 
 static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *ocl, cl_kernel *kernels)
@@ -312,14 +336,15 @@ static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *o
                         0, NULL, &benchmark->events[idx]));
 
             CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[i], benchmark->dev_data_out[idx], CL_FALSE, 
-                        0, benchmark->image_size, benchmark->host_data[idx], 
+                        0, benchmark->image_size, benchmark->multi_result[idx], 
                         1, &benchmark->events[idx], &benchmark->read_events[idx]));
         }
     }
 
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
     g_timer_stop(timer);
-    g_print("# %ix GPU (single thread): %fs have passed\n", ocl->num_devices, g_timer_elapsed(timer, NULL));
+    g_print("# %ix GPU (single thread): %fs (error=%f)\n", 
+            ocl->num_devices, g_timer_elapsed(timer, NULL), compare_single_multi(benchmark));
     g_timer_destroy(timer);
 
     if (DO_PROFILE) {
@@ -350,7 +375,7 @@ static gpointer thread_func(gpointer data)
                     0, NULL, &benchmark->events[idx]));
 
         CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[i], benchmark->dev_data_out[idx], CL_FALSE, 
-                    0, benchmark->image_size, benchmark->host_data[idx], 
+                    0, benchmark->image_size, benchmark->multi_result[idx], 
                     1, &benchmark->events[idx], &benchmark->read_events[idx]));
     }
 }
@@ -382,13 +407,15 @@ static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *oc
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
 
     g_timer_stop(timer);
-    g_print("# %ix GPU (multi thread): %fs have passed\n", ocl->num_devices, g_timer_elapsed(timer, NULL));
+    g_print("# %ix GPU (multi thread): %fs (error=%f)\n", 
+            ocl->num_devices, g_timer_elapsed(timer, NULL), compare_single_multi(benchmark));
     g_timer_destroy(timer);
 }
 
 
 int main(int argc, char const* argv[])
 {
+    g_print("## %s@%s\n", g_get_user_name(), g_get_host_name());
 
     cl_int errcode = CL_SUCCESS;
     opencl_desc *ocl = ocl_new();
