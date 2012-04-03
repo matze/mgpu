@@ -1,7 +1,17 @@
 ## matthias@ipemv1
 # Device 0: GeForce GTX 580
 # Device 1: GeForce GTX 580
-# Computing <nlm> for 32 images of size 1024x1024
-# Single GPU: 18.713065s
-# 2x GPU (single thread): 18.729572s (error=0.000000)
-# 2x GPU (multi thread): 9.328695s (error=0.000000)
+# Computing <nlm> for 30 images of size 1024x1024
+# Single GPU: 17.547636s
+# 2x GPU (single thread): 17.558456s (error=0.000000)
+# 2x GPU (multi thread): 8.744471s (error=0.000000)
+## vogelgesang@ipepdvcompute1
+# Device 0: GeForce GTX 580
+# Device 1: GeForce GTX 295
+# Device 2: GeForce GTX 295
+# Device 3: GeForce GTX 295
+# Device 4: GeForce GTX 295
+# Computing <nlm> for 30 images of size 1024x1024
+# Single GPU: 17.432261s
+# 5x GPU (single thread): 85.992705s (error=0.021784)
+# 5x GPU (multi thread): 23.614070s (error=0.021784))
