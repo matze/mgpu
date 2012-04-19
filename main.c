@@ -119,7 +119,7 @@ static gchar *ocl_read_program(const gchar *filename)
     const size_t length = ftell(fp);
     rewind(fp);
 
-    gchar *buffer = (gchar *) g_malloc0(length);
+    gchar *buffer = (gchar *) g_malloc0(length+1);
     if (buffer == NULL) {
         fclose(fp);
         return NULL;
@@ -164,13 +164,42 @@ cl_program ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar 
     return program;
 }
 
+static cl_platform_id get_nvidia_platform(void)
+{
+    cl_platform_id *platforms = NULL;
+    cl_uint num_platforms = 0;
+    cl_platform_id nvidia_platform = NULL;
+
+    cl_int errcode = clGetPlatformIDs(0, NULL, &num_platforms);
+    if (errcode != CL_SUCCESS)
+        return NULL;
+
+    platforms = (cl_platform_id *) g_malloc0(num_platforms * sizeof(cl_platform_id));
+    errcode = clGetPlatformIDs(num_platforms, platforms, NULL);
+
+    gchar result[256];
+
+    for (int i = 0; i < num_platforms; i++) {
+        clGetPlatformInfo(platforms[i], CL_PLATFORM_VENDOR, 256, result, NULL);
+        if (g_strstr_len(result, -1, "NVIDIA") != NULL) {
+            nvidia_platform = platforms[i];
+            break; 
+        }
+    }
+
+    g_free(platforms);
+    return nvidia_platform;
+}
+
 opencl_desc *ocl_new()
 {
     opencl_desc *ocl = g_malloc0(sizeof(opencl_desc));
 
-    cl_platform_id platform;
+    cl_platform_id platform = get_nvidia_platform();
+    if (platform == NULL)
+        return NULL;
+
     int errcode = CL_SUCCESS;
-    CHECK_ERROR(clGetPlatformIDs(1, &platform, NULL));
 
     CHECK_ERROR(clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 0, NULL, &ocl->num_devices));
     ocl->devices = g_malloc0(ocl->num_devices * sizeof(cl_device_id));
