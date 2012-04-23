@@ -212,10 +212,14 @@ opencl_desc *ocl_new()
     cl_command_queue_properties queue_properties = DO_PROFILE ? CL_QUEUE_PROFILING_ENABLE : 0;
 
     const size_t len = 256;
-    char device_name[len];
+    char string_buffer[len];
+
+    CHECK_ERROR(clGetPlatformInfo(platform, CL_PLATFORM_VERSION, len, string_buffer, NULL));
+    printf("# Platform: %s\n", string_buffer);
+
     for (int i = 0; i < ocl->num_devices; i++) {
-        CHECK_ERROR(clGetDeviceInfo(ocl->devices[i], CL_DEVICE_NAME, len, device_name, NULL));
-        printf("# Device %i: %s\n", i, device_name);
+        CHECK_ERROR(clGetDeviceInfo(ocl->devices[i], CL_DEVICE_NAME, len, string_buffer, NULL));
+        printf("# Device %i: %s\n", i, string_buffer);
         ocl->cmd_queues[i] = clCreateCommandQueue(ocl->context, ocl->devices[i], queue_properties, &errcode);
         CHECK_ERROR(errcode);
     }
