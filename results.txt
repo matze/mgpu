@@ -1,4 +1,4 @@
-## matthias@ipemv1
+## matthias@ipemv1 (NVIDIA 295.33)
 # Device 0: GeForce GTX 580
 # Device 1: GeForce GTX 580
 # Computing <nlm> for 30 images of size 1024x1024
@@ -15,3 +15,23 @@
 # Single GPU: 17.432261s
 # 5x GPU (single thread): 85.992705s (error=0.021784)
 # 5x GPU (multi thread): 23.614070s (error=0.021784))
+## matthias@ipemv1 (NVIDIA 295.40)
+# Platform: OpenCL 1.1 CUDA 4.2.1
+# Device 0: GeForce GTX 580
+# Device 1: GeForce GTX 580
+# Computing <nlm> for 30 images of size 1024x1024
+# Single GPU: 17.548538s
+# 2x GPU (single thread): 17.561254s (error=0.000000)
+# 2x GPU (multi thread): 8.747523s (error=0.000000)
+## vogelgesang@ufosrv1 (NVIDIA 295.20)
+# Platform: OpenCL 1.1 CUDA 4.2.1
+# Device 0: GeForce GTX 580
+# Device 1: GeForce GTX 580
+# Device 2: GeForce GTX 580
+# Device 3: GeForce GTX 580
+# Device 4: GeForce GTX 580
+# Device 5: GeForce GTX 580
+# Computing <nlm> for 30 images of size 1024x1024
+# Single GPU: 17.537085s
+# 6x GPU (single thread): 15.204485s (error=0.000000)
+# 6x GPU (multi thread): 2.919847s (error=0.000000)
