@@ -411,6 +411,8 @@ static gpointer thread_func(gpointer data)
                     0, benchmark->image_size, benchmark->multi_result[idx], 
                     1, &benchmark->events[idx], &benchmark->read_events[idx]));
     }
+
+    return NULL;
 }
 
 static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *ocl, cl_kernel *kernels)
