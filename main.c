@@ -1,6 +1,25 @@
+/* main.c as part of mgpu
+ *
+ * Copyright (C) 2011-2012 Matthias Vogelgesang <matthias.vogelgesang@gmail.com>
+ *
+ * mgpu is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * mgpu is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Labyrinth; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA  02110-1301  USA
+ */
 
 #include <CL/cl.h>
-#include <glib-2.0/glib.h>
+#include <glib.h>
 #include <stdio.h>
 
 static const gboolean DO_PROFILE = TRUE;
@@ -336,10 +355,8 @@ static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel
     g_print("# Single GPU: %fs\n", g_timer_elapsed(timer, NULL));
     g_timer_destroy(timer);
 
-    if (DO_PROFILE) {
+    if (DO_PROFILE)
         ocl_show_event_info("single", 0, benchmark->num_images, benchmark->events);
-        /* ocl_show_event_info(0, 0, 1, benchmark->num_images, benchmark->read_events); */
-    }
 }
 
 static gdouble compare_single_multi(Benchmark *benchmark)
@@ -383,9 +400,6 @@ static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *o
     if (DO_PROFILE) {
         for (int i = 0; i < ocl->num_devices; i++)
             ocl_show_event_info("multi", i, batch_size, benchmark->events + i*batch_size);
-
-        /* for (int i = 0; i < ocl->num_devices; i++) */
-        /*     ocl_show_event_info(1, i, 1, batch_size, benchmark->read_events + i*batch_size); */
     }
 }
 
