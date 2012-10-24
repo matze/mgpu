@@ -276,12 +276,12 @@ static void ocl_show_event_info(const gchar *kernel, guint queue, guint num_even
     }
 }
 
-static Benchmark *setup_benchmark(opencl_desc *ocl)
+static Benchmark *setup_benchmark(opencl_desc *ocl, gint num_images)
 {
     Benchmark *b = (Benchmark *) g_malloc0(sizeof(Benchmark));
     cl_int errcode = CL_SUCCESS;
 
-    b->num_images = ocl->num_devices * 16;
+    b->num_images = num_images < 0 ? ocl->num_devices * 16 : num_images;
     b->width = 1024;
     b->height = 1024;
     b->image_size = b->width * b->height * sizeof(gfloat);
@@ -489,7 +489,10 @@ int main(int argc, char const* argv[])
         CHECK_ERROR(errcode);
     }
 
-    Benchmark *benchmark = setup_benchmark(ocl);
+    gint num_images = -1;
+    if (argc > 1)
+        num_images = atoi(argv[1]);
+    Benchmark *benchmark = setup_benchmark(ocl, num_images);
 
     measure_single_gpu(benchmark, ocl, kernels);
     measure_multi_gpu_single_thread(benchmark, ocl, kernels);
