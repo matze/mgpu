@@ -22,7 +22,7 @@
 #include <glib.h>
 #include <stdio.h>
 
-static const gboolean DO_PROFILE = TRUE;
+static const gboolean DO_PROFILE = FALSE;
 
 typedef struct {
     cl_context context;
@@ -281,7 +281,7 @@ static Benchmark *setup_benchmark(opencl_desc *ocl)
     Benchmark *b = (Benchmark *) g_malloc0(sizeof(Benchmark));
     cl_int errcode = CL_SUCCESS;
 
-    b->num_images = 30;
+    b->num_images = ocl->num_devices * 16;
     b->width = 1024;
     b->height = 1024;
     b->image_size = b->width * b->height * sizeof(gfloat);
