@@ -336,6 +336,7 @@ static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel
 {
     size_t global_work_size[2] = { benchmark->width, benchmark->height };
     GTimer *timer = g_timer_new();
+    gdouble time;
 
     for (int i = 0; i < benchmark->num_images; i++) {
         CHECK_ERROR(clSetKernelArg(kernels[0], 0, sizeof(cl_mem), (void *) &benchmark->dev_data_in[i]))
@@ -352,7 +353,8 @@ static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel
 
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
     g_timer_stop(timer);
-    g_print("# Single GPU: %fs\n", g_timer_elapsed(timer, NULL));
+    time = g_timer_elapsed(timer, NULL);
+    g_print("# Single GPU: %fs -> %fs/image\n", time, time / benchmark->num_images);
     g_timer_destroy(timer);
 
     if (DO_PROFILE)
@@ -373,6 +375,7 @@ static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *o
 {
     const int batch_size = benchmark->num_images / ocl->num_devices;
     size_t global_work_size[2] = { benchmark->width, benchmark->height };
+    gdouble time;
     GTimer *timer = g_timer_new();
 
     for (int i = 0; i < ocl->num_devices; i++) {
@@ -393,8 +396,9 @@ static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *o
 
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
     g_timer_stop(timer);
-    g_print("# %ix GPU (single thread): %fs (error=%f)\n",
-            ocl->num_devices, g_timer_elapsed(timer, NULL), compare_single_multi(benchmark));
+    time = g_timer_elapsed(timer, NULL);
+    g_print("# %ix GPU (single thread): %fs -> %fs/image (error=%f)\n",
+            ocl->num_devices, time, time / benchmark->num_images, compare_single_multi(benchmark));
     g_timer_destroy(timer);
 
     if (DO_PROFILE) {
@@ -434,6 +438,7 @@ static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *oc
     GThread *threads[ocl->num_devices];
     ThreadLocalBenchmark tlb[ocl->num_devices];
     const guint batch_size = benchmark->num_images / ocl->num_devices;
+    gdouble time;
 
     g_thread_init(NULL);
     GTimer *timer = g_timer_new();
@@ -456,8 +461,9 @@ static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *oc
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
 
     g_timer_stop(timer);
-    g_print("# %ix GPU (multi thread): %fs (error=%f)\n",
-            ocl->num_devices, g_timer_elapsed(timer, NULL), compare_single_multi(benchmark));
+    time = g_timer_elapsed(timer, NULL);
+    g_print("# %ix GPU (multi thread): %fs -> %fs/image (error=%f)\n",
+            ocl->num_devices, time, time / benchmark->num_images, compare_single_multi(benchmark));
     g_timer_destroy(timer);
 }
 
