@@ -29,6 +29,7 @@ typedef struct {
     guint width;
     guint height;
     gboolean do_profile;
+    gboolean disable_writes;
 } Settings;
 
 typedef struct {
@@ -148,14 +149,17 @@ prepare_and_run_kernel (Benchmark *benchmark, guint device, guint index, gfloat 
     cl_kernel kernel = benchmark->kernels[device];
     cl_mem dev_data_in = benchmark->dev_data_in[device];
     cl_mem dev_data_out = benchmark->dev_data_out[device];
-    cl_event *write_event_loc = &benchmark->write_events[index];
     cl_event *read_event_loc = &benchmark->read_events[index];
     cl_event *exec_event_loc = &benchmark->events[index];
+    cl_event *write_event_loc = NULL;
     size_t global_work_size[2] = { benchmark->settings->width, benchmark->settings->height };
 
-//    CHECK_ERROR(clEnqueueWriteBuffer (cmd_queue, dev_data_in, CL_TRUE,
-//               0, benchmark->image_size, benchmark->host_data[index],
-//                0, NULL, write_event_loc));
+    if (!benchmark->settings->disable_writes) {
+        CHECK_ERROR(clEnqueueWriteBuffer (cmd_queue, dev_data_in, CL_TRUE,
+                    0, benchmark->image_size, benchmark->host_data[index],
+                    0, NULL, write_event_loc));
+        write_event_loc = &benchmark->write_events[index];
+    }
 
     CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in));
     CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out));
@@ -281,14 +285,16 @@ int main(int argc, char *argv[])
         .num_images = -1,
         .width = 1024,
         .height = 1024,
-        .do_profile = FALSE
+        .do_profile = FALSE,
+        .disable_writes = FALSE
     };
 
     static GOptionEntry entries[] = {
         { "num-images", 'n', 0, G_OPTION_ARG_INT, &settings.num_images, "Number of images", "N" },
         { "width", 'w', 0, G_OPTION_ARG_INT, &settings.width, "Width of imags", "W" },
         { "height", 'h', 0, G_OPTION_ARG_INT, &settings.height, "Height of images", "H" },
-        { "enable-profiling", 'n', 0, G_OPTION_ARG_NONE, &settings.do_profile, "Enable profiling", NULL },
+        { "enable-profiling", 'p', 0, G_OPTION_ARG_NONE, &settings.do_profile, "Enable profiling", NULL },
+        { "disable-writes", 0, 0, G_OPTION_ARG_NONE, &settings.disable_writes, "Disable writes", NULL },
         { NULL }
     };
 
