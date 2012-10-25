@@ -14,7 +14,7 @@ opencl_desc *   ocl_new             (gboolean enable_profiling);
 void            ocl_free            (opencl_desc *ocl);
 gchar *         ocl_read_program    (const gchar *filename);
 cl_program      ocl_get_program     (opencl_desc *ocl, const gchar *filename, const gchar *options);
-void            ocl_show_event_info (const gchar *kernel, guint queue, guint num_events, cl_event *events);
+void            ocl_show_event_info (FILE *fp, const gchar *kernel, guint num_events, cl_event *events);
 const gchar*    opencl_map_error    (int error);
 
 #define CHECK_ERROR(error) { \

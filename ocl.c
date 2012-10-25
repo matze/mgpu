@@ -200,21 +200,24 @@ ocl_free(opencl_desc *ocl)
 }
 
 void
-ocl_show_event_info(const gchar *kernel, guint queue, guint num_events, cl_event *events)
+ocl_show_event_info(FILE *fp, const gchar *kernel, guint num_events, cl_event *events)
 {
-    cl_ulong param;
-    size_t size = sizeof(cl_ulong);
-
-    g_print("# kernel device queued submitted start end\n");
     for (int i = 0; i < num_events; i++) {
-        g_print("%s %d", kernel, queue);
-        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_QUEUED, size, &param, NULL));
-        g_print(" %ld", param);
-        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_SUBMIT, size, &param, NULL));
-        g_print(" %ld", param);
-        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_START, size, &param, NULL));
-        g_print(" %ld", param);
-        CHECK_ERROR(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_END, size, &param, NULL));
-        g_print(" %ld\n", param);
+        cl_ulong param;
+        cl_event event;
+        cl_command_queue queue;
+
+        event = events[i];
+        clGetEventInfo (event, CL_EVENT_COMMAND_QUEUE, sizeof (cl_command_queue), &queue, NULL);
+
+        fprintf (fp, "%s %p", kernel, queue);
+        CHECK_ERROR(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &param, NULL));
+        fprintf (fp, " %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &param, NULL));
+        fprintf (fp, " %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &param, NULL));
+        fprintf (fp, " %ld", param);
+        CHECK_ERROR(clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &param, NULL));
+        fprintf (fp, " %ld\n", param);
     }
 }

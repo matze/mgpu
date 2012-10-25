@@ -262,6 +262,17 @@ measure_benchmark (const gchar *prefix, BenchmarkFunc func, Benchmark *benchmark
     error = check_error ? compare_single_multi (benchmark) : 0.0;
     g_print("# %s: total = %fs, time per image = %fs, error = %f\n",
             prefix, time, time / benchmark->num_images, error);
+
+    if (benchmark->settings->do_profile) {
+        FILE *fp;
+        gchar *filename;
+
+        filename = g_strdup_printf ("%s.clstat", prefix);
+        fp = fopen(filename, "w");
+        ocl_show_event_info (fp, "nlm", benchmark->num_images, benchmark->events);
+        fclose (fp);
+        g_free (filename);
+    }
 }
 
 int main(int argc, char *argv[])
@@ -298,7 +309,7 @@ int main(int argc, char *argv[])
 
     g_thread_init (NULL);
 
-    ocl = ocl_new (FALSE);
+    ocl = ocl_new (settings.do_profile);
     benchmark = setup_benchmark (ocl, &settings);
 
     measure_benchmark ("Single GPU", execute_single_gpu, benchmark);
