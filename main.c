@@ -153,16 +153,16 @@ prepare_and_run_kernel (Benchmark *benchmark, guint device, guint index, gfloat 
     cl_event *exec_event_loc = &benchmark->events[index];
     size_t global_work_size[2] = { benchmark->settings->width, benchmark->settings->height };
 
-    CHECK_ERROR(clEnqueueWriteBuffer (cmd_queue, dev_data_in, CL_TRUE,
-                0, benchmark->image_size, benchmark->host_data[index],
-                0, NULL, write_event_loc));
+//    CHECK_ERROR(clEnqueueWriteBuffer (cmd_queue, dev_data_in, CL_TRUE,
+//               0, benchmark->image_size, benchmark->host_data[index],
+//                0, NULL, write_event_loc));
 
     CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in));
     CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out));
 
     CHECK_ERROR(clEnqueueNDRangeKernel(cmd_queue, kernel,
                 2, NULL, global_work_size, NULL,
-                1, write_event_loc, exec_event_loc));
+                0, NULL, exec_event_loc));
 
     CHECK_ERROR(clEnqueueReadBuffer(cmd_queue, dev_data_out, CL_FALSE,
                 0, benchmark->image_size, output,
