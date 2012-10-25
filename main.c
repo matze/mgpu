@@ -29,9 +29,6 @@ typedef struct {
     cl_uint num_devices;
     cl_device_id *devices;
     cl_command_queue *cmd_queues;
-
-    GList *kernel_table;
-    GHashTable *kernels;         /**< maps from kernel string to cl_kernel */
 } opencl_desc;
 
 typedef struct {
@@ -46,12 +43,13 @@ typedef struct {
     cl_mem *dev_data_out;
     cl_event *events;
     cl_event *read_events;
+    cl_event *write_events;
+    cl_kernel *kernels;
 } Benchmark;
 
 typedef struct {
     Benchmark *benchmark;
     opencl_desc *ocl;
-    cl_kernel *kernels;
     guint batch_size;
     guint thread_id;
 } ThreadLocalBenchmark;
@@ -128,7 +126,8 @@ const gchar* opencl_map_error(int error)
 #define CHECK_ERROR(error) { \
     if ((error) != CL_SUCCESS) g_message("OpenCL error <%s:%i>: %s", __FILE__, __LINE__, opencl_map_error((error))); }
 
-static gchar *ocl_read_program(const gchar *filename)
+static gchar *
+ocl_read_program(const gchar *filename)
 {
     FILE *fp = fopen(filename, "r");
     if (fp == NULL)
@@ -153,7 +152,8 @@ static gchar *ocl_read_program(const gchar *filename)
     return buffer;
 }
 
-cl_program ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar *options)
+static cl_program
+ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar *options)
 {
     gchar *buffer = ocl_read_program(filename);
     if (buffer == NULL)
@@ -183,7 +183,8 @@ cl_program ocl_get_program(opencl_desc *ocl, const gchar *filename, const gchar 
     return program;
 }
 
-static cl_platform_id get_nvidia_platform(void)
+static cl_platform_id
+get_nvidia_platform(void)
 {
     cl_platform_id *platforms = NULL;
     cl_uint num_platforms = 0;
@@ -210,7 +211,8 @@ static cl_platform_id get_nvidia_platform(void)
     return nvidia_platform;
 }
 
-opencl_desc *ocl_new()
+static opencl_desc *
+ocl_new()
 {
     opencl_desc *ocl = g_malloc0(sizeof(opencl_desc));
 
@@ -245,7 +247,8 @@ opencl_desc *ocl_new()
     return ocl;
 }
 
-static void ocl_free(opencl_desc *ocl)
+static void
+ocl_free(opencl_desc *ocl)
 {
     for (int i = 0; i < ocl->num_devices; i++)
         clReleaseCommandQueue(ocl->cmd_queues[i]);
@@ -257,7 +260,8 @@ static void ocl_free(opencl_desc *ocl)
     g_free(ocl);
 }
 
-static void ocl_show_event_info(const gchar *kernel, guint queue, guint num_events, cl_event *events)
+static void
+ocl_show_event_info(const gchar *kernel, guint queue, guint num_events, cl_event *events)
 {
     cl_ulong param;
     size_t size = sizeof(cl_ulong);
@@ -276,10 +280,30 @@ static void ocl_show_event_info(const gchar *kernel, guint queue, guint num_even
     }
 }
 
-static Benchmark *setup_benchmark(opencl_desc *ocl, gint num_images)
+static Benchmark *
+setup_benchmark(opencl_desc *ocl, gint num_images)
 {
-    Benchmark *b = (Benchmark *) g_malloc0(sizeof(Benchmark));
+    Benchmark *b;
+    cl_program program;
     cl_int errcode = CL_SUCCESS;
+
+    program = ocl_get_program(ocl, "nlm.cl", "");
+
+    if (program == NULL) {
+        g_warning ("Could not open nlm.cl");
+        ocl_free (ocl);
+        return NULL;
+    }
+
+    b = (Benchmark *) g_malloc0(sizeof(Benchmark));
+
+    /* Create kernel for each device */
+    b->kernels = g_malloc0(ocl->num_devices * sizeof(cl_kernel));
+
+    for (int i = 0; i < ocl->num_devices; i++) {
+        b->kernels[i] = clCreateKernel(program, "nlm", &errcode);
+        CHECK_ERROR(errcode);
+    }
 
     b->num_images = num_images < 0 ? ocl->num_devices * 16 : num_images;
     b->width = 1024;
@@ -288,10 +312,9 @@ static Benchmark *setup_benchmark(opencl_desc *ocl, gint num_images)
     b->single_result = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
     b->multi_result = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
     b->host_data = (gfloat **) g_malloc0(b->num_images * sizeof(gfloat *));
-    b->dev_data_in = (cl_mem *) g_malloc0(b->num_images * sizeof(cl_mem));
-    b->dev_data_out = (cl_mem *) g_malloc0(b->num_images * sizeof(cl_mem));
     b->events = (cl_event *) g_malloc0(b->num_images * sizeof(cl_event));
     b->read_events = (cl_event *) g_malloc0(b->num_images * sizeof(cl_event));
+    b->write_events = (cl_event *) g_malloc0(b->num_images * sizeof(cl_event));
 
     g_print("# Computing <nlm> for %i images of size %ix%i\n", b->num_images, b->width, b->height);
 
@@ -302,8 +325,13 @@ static Benchmark *setup_benchmark(opencl_desc *ocl, gint num_images)
 
         for (guint j = 0; j < b->width * b->height; j++)
             b->host_data[i][j] = (gfloat) g_random_double();
+    }
 
-        b->dev_data_in[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, b->image_size, b->host_data[i], &errcode);
+    b->dev_data_in = (cl_mem *) g_malloc0(ocl->num_devices * sizeof(cl_mem));
+    b->dev_data_out = (cl_mem *) g_malloc0(ocl->num_devices * sizeof(cl_mem));
+
+    for (guint i = 0; i < ocl->num_devices; i++) {
+        b->dev_data_in[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, b->image_size, NULL, &errcode);
         CHECK_ERROR(errcode);
         b->dev_data_out[i] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, b->image_size, NULL, &errcode);
         CHECK_ERROR(errcode);
@@ -312,12 +340,16 @@ static Benchmark *setup_benchmark(opencl_desc *ocl, gint num_images)
     return b;
 }
 
-static void teardown_benchmark(Benchmark *b)
+static void
+teardown_benchmark(opencl_desc *ocl, Benchmark *b)
 {
-    for (int i = 0; i < b->num_images; i++) {
+    for (guint i = 0; i < b->num_images; i++) {
         g_free(b->host_data[i]);
         g_free(b->single_result[i]);
         g_free(b->multi_result[i]);
+    }
+
+    for (guint i = 0; i < ocl->num_devices; i++) {
         CHECK_ERROR(clReleaseMemObject(b->dev_data_in[i]));
         CHECK_ERROR(clReleaseMemObject(b->dev_data_out[i]));
     }
@@ -329,26 +361,47 @@ static void teardown_benchmark(Benchmark *b)
     g_free(b->dev_data_out);
     g_free(b->events);
     g_free(b->read_events);
+    g_free(b->write_events);
     g_free(b);
 }
 
-static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel *kernels)
+static void
+prepare_and_run_kernel (Benchmark *benchmark, opencl_desc *ocl, guint device, guint index, gfloat *output)
 {
+    cl_command_queue cmd_queue = ocl->cmd_queues[device];
+    cl_kernel kernel = benchmark->kernels[device];
+    cl_mem dev_data_in = benchmark->dev_data_in[device];
+    cl_mem dev_data_out = benchmark->dev_data_out[device];
+    cl_event *write_event_loc = &benchmark->write_events[index];
+    cl_event *read_event_loc = &benchmark->read_events[index];
+    cl_event *exec_event_loc = &benchmark->events[index];
     size_t global_work_size[2] = { benchmark->width, benchmark->height };
-    GTimer *timer = g_timer_new();
+
+    CHECK_ERROR(clEnqueueWriteBuffer (cmd_queue, dev_data_in, CL_TRUE,
+                0, benchmark->image_size, benchmark->host_data[index],
+                0, NULL, write_event_loc));
+
+    CHECK_ERROR(clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *) &dev_data_in));
+    CHECK_ERROR(clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *) &dev_data_out));
+
+    CHECK_ERROR(clEnqueueNDRangeKernel(cmd_queue, kernel,
+                2, NULL, global_work_size, NULL,
+                1, write_event_loc, exec_event_loc));
+
+    CHECK_ERROR(clEnqueueReadBuffer(cmd_queue, dev_data_out, CL_FALSE,
+                0, benchmark->image_size, output,
+                1, exec_event_loc, read_event_loc));
+}
+
+static void
+measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl)
+{
     gdouble time;
+    GTimer *timer = g_timer_new();
 
     for (int i = 0; i < benchmark->num_images; i++) {
-        CHECK_ERROR(clSetKernelArg(kernels[0], 0, sizeof(cl_mem), (void *) &benchmark->dev_data_in[i]))
-        CHECK_ERROR(clSetKernelArg(kernels[0], 1, sizeof(cl_mem), (void *) &benchmark->dev_data_out[i]));
 
-        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[0], kernels[0],
-                2, NULL, global_work_size, NULL,
-                0, NULL, &benchmark->events[i]));
-
-        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[0], benchmark->dev_data_out[i], CL_FALSE, 0,
-                    benchmark->image_size, benchmark->single_result[i],
-                    1, &benchmark->events[i], &benchmark->read_events[i]));
+        prepare_and_run_kernel (benchmark, ocl, 0, i, benchmark->single_result[i]);
     }
 
     clWaitForEvents(benchmark->num_images, benchmark->read_events);
@@ -361,7 +414,8 @@ static void measure_single_gpu(Benchmark *benchmark, opencl_desc *ocl, cl_kernel
         ocl_show_event_info("single", 0, benchmark->num_images, benchmark->events);
 }
 
-static gdouble compare_single_multi(Benchmark *benchmark)
+static gdouble
+compare_single_multi(Benchmark *benchmark)
 {
     gdouble sum = 0.0;
     for (guint i = 0; i < benchmark->num_images; i++)
@@ -371,26 +425,17 @@ static gdouble compare_single_multi(Benchmark *benchmark)
     return sum;
 }
 
-static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *ocl, cl_kernel *kernels)
+static void
+measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *ocl)
 {
     const int batch_size = benchmark->num_images / ocl->num_devices;
-    size_t global_work_size[2] = { benchmark->width, benchmark->height };
     gdouble time;
     GTimer *timer = g_timer_new();
 
     for (int i = 0; i < ocl->num_devices; i++) {
         for (int j = 0; j < batch_size; j++) {
             int idx = i*batch_size + j;
-            CHECK_ERROR(clSetKernelArg(kernels[i], 0, sizeof(cl_mem), (void *) &benchmark->dev_data_in[idx]))
-            CHECK_ERROR(clSetKernelArg(kernels[i], 1, sizeof(cl_mem), (void *) &benchmark->dev_data_out[idx]));
-
-            CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[i], kernels[i],
-                        2, NULL, global_work_size, NULL,
-                        0, NULL, &benchmark->events[idx]));
-
-            CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[i], benchmark->dev_data_out[idx], CL_FALSE,
-                        0, benchmark->image_size, benchmark->multi_result[idx],
-                        1, &benchmark->events[idx], &benchmark->read_events[idx]));
+            prepare_and_run_kernel (benchmark, ocl, i, idx, benchmark->multi_result[idx]);
         }
     }
 
@@ -407,33 +452,24 @@ static void measure_multi_gpu_single_thread(Benchmark *benchmark, opencl_desc *o
     }
 }
 
-static gpointer thread_func(gpointer data)
+static gpointer
+thread_func(gpointer data)
 {
     ThreadLocalBenchmark *tlb = (ThreadLocalBenchmark *) data;
     Benchmark *benchmark = tlb->benchmark;
     opencl_desc *ocl = tlb->ocl;
-    cl_kernel *kernels = tlb->kernels;
-    size_t global_work_size[2] = { benchmark->width, benchmark->height };
     const guint i = tlb->thread_id;
 
     for (int j = 0; j < tlb->batch_size; j++) {
         int idx = tlb->thread_id * tlb->batch_size + j;
-        CHECK_ERROR(clSetKernelArg(kernels[i], 0, sizeof(cl_mem), (void *) &benchmark->dev_data_in[idx]))
-        CHECK_ERROR(clSetKernelArg(kernels[i], 1, sizeof(cl_mem), (void *) &benchmark->dev_data_out[idx]));
-
-        CHECK_ERROR(clEnqueueNDRangeKernel(ocl->cmd_queues[i], kernels[i],
-                    2, NULL, global_work_size, NULL,
-                    0, NULL, &benchmark->events[idx]));
-
-        CHECK_ERROR(clEnqueueReadBuffer(ocl->cmd_queues[i], benchmark->dev_data_out[idx], CL_FALSE,
-                    0, benchmark->image_size, benchmark->multi_result[idx],
-                    1, &benchmark->events[idx], &benchmark->read_events[idx]));
+        prepare_and_run_kernel (benchmark, ocl, i, idx, benchmark->multi_result[idx]);
     }
 
     return NULL;
 }
 
-static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *ocl, cl_kernel *kernels)
+static void
+measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *ocl)
 {
     GThread *threads[ocl->num_devices];
     ThreadLocalBenchmark tlb[ocl->num_devices];
@@ -446,7 +482,6 @@ static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *oc
     for (guint i = 0; i < ocl->num_devices; i++) {
         tlb[i].benchmark = benchmark;
         tlb[i].ocl = ocl;
-        tlb[i].kernels = kernels;
         tlb[i].batch_size = batch_size;
         tlb[i].thread_id = i;
 
@@ -470,38 +505,27 @@ static void measure_multi_gpu_multi_thread(Benchmark *benchmark, opencl_desc *oc
 
 int main(int argc, char const* argv[])
 {
+    opencl_desc *ocl;
+    Benchmark *benchmark;
+
     g_print("## %s@%s\n", g_get_user_name(), g_get_host_name());
 
-    cl_int errcode = CL_SUCCESS;
-    opencl_desc *ocl = ocl_new();
-
-    cl_program program = ocl_get_program(ocl, "nlm.cl", "");
-    if (program == NULL) {
-        g_warning("Could not open nlm.cl");
-        ocl_free(ocl);
-        return 1;
-    }
-
-    /* Create kernel for each device */
-    cl_kernel *kernels = g_malloc0(ocl->num_devices * sizeof(cl_kernel));
-    for (int i = 0; i < ocl->num_devices; i++) {
-        kernels[i] = clCreateKernel(program, "nlm", &errcode);
-        CHECK_ERROR(errcode);
-    }
+    ocl = ocl_new();
 
     gint num_images = -1;
     if (argc > 1)
         num_images = atoi(argv[1]);
-    Benchmark *benchmark = setup_benchmark(ocl, num_images);
 
-    measure_single_gpu(benchmark, ocl, kernels);
-    measure_multi_gpu_single_thread(benchmark, ocl, kernels);
-    measure_multi_gpu_multi_thread(benchmark, ocl, kernels);
+    benchmark = setup_benchmark(ocl, num_images);
 
-    teardown_benchmark(benchmark);
+    measure_single_gpu(benchmark, ocl);
+    measure_multi_gpu_multi_thread(benchmark, ocl);
+    measure_multi_gpu_single_thread(benchmark, ocl);
+    measure_multi_gpu_multi_thread(benchmark, ocl);
+    measure_multi_gpu_single_thread(benchmark, ocl);
 
-    g_free(kernels);
+    teardown_benchmark(ocl, benchmark);
+
     ocl_free(ocl);
     return 0;
 }
-
